@@ -14,7 +14,11 @@ static void json_string(const char *s)
         case '\t': fputs("\\t", stdout);  break;
         case '\r': fputs("\\r", stdout);  break;
         default:
-            if (*p < 0x20) {
+            if (*p < 0x20 || *p == 0x7f) {
+                printf("\\u%04x", *p);
+            } else if (*p >= 0x80) {
+                /* Non-ASCII: could be valid UTF-8 or arbitrary bytes.
+                 * Escape as \uXXXX to guarantee valid JSON. */
                 printf("\\u%04x", *p);
             } else {
                 putchar(*p);
@@ -53,7 +57,7 @@ void render_json(const struct dir_summary *summary,
         json_string(e->name);
 
         if (e->error) {
-            printf(",\"error\":\"permission_denied\"");
+            printf(",\"error\":\"%s\"", errno_str(e->error));
         } else if (e->type == ENTRY_DIR) {
             if (e->dir_files >= 0)
                 printf(",\"files\":%d", e->dir_files);

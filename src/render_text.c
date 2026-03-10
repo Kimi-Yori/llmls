@@ -39,7 +39,7 @@ void render_default(const struct dir_summary *summary,
         printf("  %s %s", type_str(e->type), name);
 
         if (e->error) {
-            printf(" error:permission_denied");
+            printf(" error:%s", errno_str(e->error));
         } else if (e->type == ENTRY_DIR) {
             if (e->dir_files >= 0)
                 printf(" files:%d", e->dir_files);

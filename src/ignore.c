@@ -14,6 +14,7 @@ static const char *ignore_dirs[] = {
 
 static const char *ignore_files[] = {
     ".DS_Store",
+    ".env",
     NULL,
 };
 

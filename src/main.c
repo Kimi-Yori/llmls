@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <time.h>
 
 static void usage(void)
@@ -91,9 +92,24 @@ int main(int argc, char **argv)
     }
 
     /* Load git status if in a repo */
-    int in_git = git_is_repo(opts.path);
-    if (in_git)
-        git_load_status(opts.path);
+    char *git_root = git_find_root(opts.path);
+    char *git_prefix = NULL; /* relative path from repo root to target dir */
+    if (git_root) {
+        git_load_status(git_root);
+
+        /* Compute relative prefix: realpath(opts.path) minus git_root */
+        char abspath[PATH_MAX];
+        if (realpath(opts.path, abspath)) {
+            size_t root_len = strlen(git_root);
+            if (strncmp(abspath, git_root, root_len) == 0) {
+                if (abspath[root_len] == '/') {
+                    git_prefix = strdup(abspath + root_len + 1);
+                } else if (abspath[root_len] == '\0') {
+                    git_prefix = strdup("");
+                }
+            }
+        }
+    }
 
     /* Walk directory */
     struct entry_list list;
@@ -106,10 +122,12 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    if (walk_directory(opts.path, opts.depth, opts.show_all, &list, &summary) < 0) {
+    if (walk_directory(opts.path, opts.depth, opts.show_all, git_prefix, &list, &summary) < 0) {
         fprintf(stderr, "llmls: cannot open '%s'\n", opts.path);
         entry_list_free(&list);
         free(display_buf);
+        free(git_root);
+        free(git_prefix);
         git_cleanup();
         return 1;
     }
@@ -135,6 +153,8 @@ int main(int argc, char **argv)
     /* Cleanup */
     entry_list_free(&list);
     free(display_buf);
+    free(git_root);
+    free(git_prefix);
     git_cleanup();
 
     return 0;

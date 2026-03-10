@@ -78,11 +78,51 @@ static enum git_status parse_porcelain(char x, char y)
     return GIT_NONE;
 }
 
-int git_is_repo(const char *path)
+/*
+ * Find git repo root by running: git -C <path> rev-parse --show-toplevel
+ * Returns allocated string (caller frees) or NULL if not in a repo.
+ */
+char *git_find_root(const char *path)
 {
-    char gitdir[4096];
-    snprintf(gitdir, sizeof(gitdir), "%s/.git", path);
-    return access(gitdir, F_OK) == 0;
+    int pipefd[2];
+    if (pipe(pipefd) < 0)
+        return NULL;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return NULL;
+    }
+
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+        execlp("git", "git", "-C", path,
+               "rev-parse", "--show-toplevel", (char *)NULL);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+    char buf[4096];
+    ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
+    close(pipefd[0]);
+
+    int wstatus;
+    waitpid(pid, &wstatus, 0);
+
+    if (n <= 0 || !WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
+        return NULL;
+
+    /* strip trailing newline */
+    buf[n] = '\0';
+    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r'))
+        buf[--n] = '\0';
+
+    return strdup(buf);
 }
 
 /*
@@ -126,6 +166,7 @@ int git_load_status(const char *repo_root)
 
     /* parent */
     close(pipefd[1]);
+    int wstatus;
 
     /* read all output */
     char *buf = NULL;
@@ -136,15 +177,18 @@ int git_load_status(const char *repo_root)
         if (bufsz + (size_t)n > bufcap) {
             bufcap = (bufsz + (size_t)n) * 2;
             char *nb = realloc(buf, bufcap);
-            if (!nb) { free(buf); close(pipefd[0]); return -1; }
+            if (!nb) {
+                free(buf);
+                close(pipefd[0]);
+                waitpid(pid, &wstatus, 0);
+                return -1;
+            }
             buf = nb;
         }
         memcpy(buf + bufsz, tmp, (size_t)n);
         bufsz += (size_t)n;
     }
     close(pipefd[0]);
-
-    int wstatus;
     waitpid(pid, &wstatus, 0);
 
     if (!buf || !WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) {

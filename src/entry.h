@@ -85,13 +85,14 @@ struct options {
 
 /* walk.c */
 int walk_directory(const char *path, int depth, int show_all,
+                   const char *git_prefix,
                    struct entry_list *list, struct dir_summary *summary);
 
 /* ignore.c */
 int should_ignore(const char *name, int show_all);
 
 /* git.c */
-int  git_is_repo(const char *path);
+char *git_find_root(const char *path);
 int  git_load_status(const char *repo_root);
 enum git_status git_file_status(const char *relpath);
 enum git_status git_dir_status(const char *dir_name);
@@ -119,6 +120,7 @@ void format_size(off_t bytes, char *buf, size_t bufsz);
 void format_age(time_t mtime, time_t now, char *buf, size_t bufsz);
 const char *git_status_str(enum git_status s);
 const char *git_status_porcelain(enum git_status s);
+const char *errno_str(int err);
 
 /* entry_list helpers */
 int  entry_list_init(struct entry_list *list);
