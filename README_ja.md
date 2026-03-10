@@ -48,6 +48,14 @@ dir project/ files:12 dirs:3 size:180K
 
 ## インストール
 
+**ビルド済みバイナリ**（Linux x86_64）：
+
+```bash
+curl -L -o llmls https://github.com/Kimi-Yori/llmls/releases/latest/download/llmls
+chmod +x llmls
+sudo mv llmls /usr/local/bin/
+```
+
 **ソースからビルド**（最小staticバイナリにはmusl-gccが必要）：
 
 ```bash

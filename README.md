@@ -48,6 +48,14 @@ dir project/ files:12 dirs:3 size:180K
 
 ## Install
 
+**Pre-built binary** (Linux x86_64):
+
+```bash
+curl -L -o llmls https://github.com/Kimi-Yori/llmls/releases/latest/download/llmls
+chmod +x llmls
+sudo mv llmls /usr/local/bin/
+```
+
 **Build from source** (requires musl-gcc for minimal static binary):
 
 ```bash
