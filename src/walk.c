@@ -135,6 +135,10 @@ int walk_directory(const char *path, int depth, int show_all,
             continue;
 
         e.mtime = st.st_mtime;
+        e.mtime_nsec = st.st_mtim.tv_nsec;
+        e.mode = st.st_mode;
+        e.uid = st.st_uid;
+        e.gid = st.st_gid;
 
         if (S_ISDIR(st.st_mode)) {
             e.type = ENTRY_DIR;

@@ -38,8 +38,26 @@ static const char *type_json(enum entry_type t)
     }
 }
 
+static void json_long_fields(const struct entry *e)
+{
+    char modebuf[8];
+    char ownerbuf[64];
+    char groupbuf[64];
+
+    format_mode(e->mode, modebuf, sizeof(modebuf));
+    format_owner(e->uid, ownerbuf, sizeof(ownerbuf));
+    format_group(e->gid, groupbuf, sizeof(groupbuf));
+
+    printf(",\"mode\":");
+    json_string(modebuf);
+    printf(",\"owner\":");
+    json_string(ownerbuf);
+    printf(",\"group\":");
+    json_string(groupbuf);
+}
+
 void render_json(const struct dir_summary *summary,
-                 const struct entry_list *list, time_t now)
+                 const struct entry_list *list, time_t now, int show_long)
 {
     printf("{\"path\":");
     json_string(summary->path);
@@ -66,7 +84,15 @@ void render_json(const struct dir_summary *summary,
             long age_sec = (long)(now - e->mtime);
             if (age_sec < 0) age_sec = 0;
             printf(",\"age_seconds\":%ld", age_sec);
+
+            if (show_long && e->type == ENTRY_SYMLINK && e->link_target) {
+                printf(",\"target\":");
+                json_string(e->link_target);
+            }
         }
+
+        if (show_long && !e->error)
+            json_long_fields(e);
 
         /* git status — only include if not clean */
         const char *gs = git_status_str(e->git);
