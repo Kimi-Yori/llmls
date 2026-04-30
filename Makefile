@@ -1,5 +1,7 @@
 CC ?= cc
+VERSION = 0.2.0
 CFLAGS = -O2 -Wall -Wextra -std=c11 -D_GNU_SOURCE
+CPPFLAGS += -DLLMLS_VERSION=\"$(VERSION)\"
 LDFLAGS = -s
 
 # Use musl-gcc for static build if available
@@ -15,18 +17,21 @@ endif
 SRC = src/main.c src/walk.c src/ignore.c src/git.c src/sort.c \
       src/render_text.c src/render_json.c src/escape.c src/util.c
 
-.PHONY: all clean static install
+.PHONY: all clean static install test
 
 all: llmls
 
 llmls: $(SRC) src/entry.h
-	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $(SRC)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(LDFLAGS) -o $@ $(SRC)
 
 static: $(SRC) src/entry.h
-	$(STATIC_CC) $(CFLAGS) $(STATIC_LDFLAGS) -o llmls $(SRC)
+	$(STATIC_CC) $(CPPFLAGS) $(CFLAGS) $(STATIC_LDFLAGS) -o llmls $(SRC)
 
 clean:
 	rm -f llmls
 
 install: llmls
 	install -m 755 llmls /usr/local/bin/
+
+test: llmls
+	sh tests/run.sh

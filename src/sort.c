@@ -64,11 +64,31 @@ static int entry_cmp(const void *a, const void *b)
     return strcasecmp(ea->name, eb->name);
 }
 
-void sort_entries(struct entry_list *list)
+static int entry_time_cmp(const void *a, const void *b)
+{
+    const struct entry *ea = a;
+    const struct entry *eb = b;
+
+    /* primary: modification time, newest first */
+    if (ea->mtime != eb->mtime)
+        return ea->mtime > eb->mtime ? -1 : 1;
+    if (ea->mtime_nsec != eb->mtime_nsec)
+        return ea->mtime_nsec > eb->mtime_nsec ? -1 : 1;
+
+    /* tie: existing smart priority */
+    if (ea->priority != eb->priority)
+        return (int)ea->priority - (int)eb->priority;
+
+    /* final tie: deterministic alphabetical order */
+    return strcasecmp(ea->name, eb->name);
+}
+
+void sort_entries(struct entry_list *list, int sort_by_time)
 {
     /* assign priorities first */
     for (size_t i = 0; i < list->count; i++)
         assign_priority(&list->entries[i]);
 
-    qsort(list->entries, list->count, sizeof(struct entry), entry_cmp);
+    qsort(list->entries, list->count, sizeof(struct entry),
+          sort_by_time ? entry_time_cmp : entry_cmp);
 }

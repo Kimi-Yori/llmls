@@ -11,23 +11,30 @@
 
 LLM-optimized file listing CLI.
 
-llmls lists files the way LLM agents need them — no color codes, no alignment padding, no icon decorations. Just filenames, sizes, ages, and git status in the minimum tokens possible. Designed for Claude Code, Cursor, Codex, and any LLM coding agent.
+llmls lists files the way LLM agents need them — no color codes, no alignment padding, no icon decorations. Just filenames, sizes, ages, git status, and opt-in permission metadata in the minimum tokens possible. Designed for Claude Code, Cursor, Codex, and any LLM coding agent.
 
 ## Why llmls?
 
-`ls -la` wastes tokens on information LLMs don't need:
+`ls -la` wastes tokens on information LLMs don't need most of the time:
 
 ```
 drwxrwxr-x  8 hi-noguchi hi-noguchi  4096 Mar  9 21:44 .
 -rw-rw-r--  1 hi-noguchi hi-noguchi 42891 Mar  8 23:47 CLAUDE.md
 ```
 
-Permissions, owner, group, link count, `.git/` entries — all noise. llmls strips it:
+Permissions, owner, group, link count, `.git/` entries — noise for the default reconnaissance step. llmls strips it by default:
 
 ```
 dir project/ files:12 dirs:3 size:180K
   file CLAUDE.md size:43K age:2d git:modified
   dir src/ files:8
+```
+
+When permissions matter, add `-l` to restore only the useful long metadata:
+
+```
+file main.c size:4K age:1mo mode:644 owner:hi-noguchi group:hi-noguchi
+dir src files:10 mode:755 owner:hi-noguchi group:hi-noguchi
 ```
 
 | | ls -la | llmls | llmls --dense |
@@ -42,6 +49,8 @@ dir project/ files:12 dirs:3 size:180K
 - **Self-explanatory output** — any LLM can parse it without reading docs
 - **Git status integration** — changed files surface first, using `git status --porcelain=v1`
 - **Smart sorting** — git:changed > important files > regular files > directories
+- **Time sorting** — `-t` switches to newest-first mtime order
+- **Opt-in long metadata** — `-l` adds octal permissions, owner, group, and symlink target
 - **Built-in ignore** — `.git/`, `node_modules/`, `__pycache__/`, `.env`, etc. filtered by default
 - **Three output modes** — default (self-explanatory), dense (compressed), JSON (machine-readable)
 - **63 KB static binary** — zero dependencies, instant startup
@@ -97,6 +106,15 @@ llmls --json
 
 # Show all files (include .git/, node_modules/, etc.)
 llmls --all
+
+# Show permissions, owner, group
+llmls -l
+
+# Newest files first
+llmls -t
+
+# Short options can be clustered
+llmls -lta
 ```
 
 ## Output Format
@@ -115,7 +133,16 @@ Design decisions:
 - `file`/`dir`/`symlink` type prefix — zero-shot readable
 - `size:`/`age:`/`git:` key:value pairs — order-independent parsing
 - `git:clean` omitted — absence means clean (noise reduction)
+- `mode:`/`owner:`/`group:` omitted unless `-l` is set
 - No column alignment — saves whitespace tokens
+
+With `-l`:
+
+```
+dir project/ files:14 dirs:3 size:180K
+  file main.c size:4K age:1mo mode:644 owner:hi-noguchi group:hi-noguchi
+  symlink current size:7B age:2d target:release mode:777 owner:hi-noguchi group:hi-noguchi
+```
 
 ### Dense (`--dense`)
 
@@ -129,6 +156,7 @@ d .. src/ f=8
 - Single char type: `f`/`d`/`l`
 - Git status: porcelain 2-char format (`M.`, `A.`, `??`, `..`)
 - Positional fields, no keys
+- With `-l`: appends `MODE OWNER:GROUP`
 
 ### JSON (`--json`)
 
@@ -140,12 +168,14 @@ d .. src/ f=8
   "size": 184320,
   "entries": [
     {"type": "file", "name": "CLAUDE.md", "size": 44032, "age_seconds": 172800, "git": "modified"},
+    {"type": "file", "name": "main.c", "size": 4096, "age_seconds": 2592000, "mode": "644", "owner": "hi-noguchi", "group": "hi-noguchi"},
     {"type": "dir", "name": "src/", "files": 8}
   ]
 }
 ```
 
 - Sizes in bytes, ages in seconds (precise, computable)
+- With `-l`, mode is an octal string and owner/group fall back to numeric ids if name lookup fails
 - Non-UTF-8 filenames safely escaped as `\uXXXX`
 
 ## Sort Order
@@ -158,6 +188,8 @@ Entries are sorted by priority (highest first):
 4. **Directories** — alphabetical
 
 This ensures the most actionable information appears first, even if context is truncated.
+
+With `-t`, entries are sorted by modification time descending. Existing smart priority is kept only as a tie-breaker for entries with the same timestamp.
 
 ## Default Ignore
 
@@ -190,6 +222,8 @@ Git status works from any subdirectory within a repository — llmls finds the r
 | `-a`, `--all` | Show all files (include ignored) |
 | `-d`, `--dense` | Dense output format |
 | `-j`, `--json` | JSON output format |
+| `-l`, `--long` | Show octal mode, owner, group, and symlink target |
+| `-t`, `--time` | Sort by modification time descending |
 | `--depth N` | Listing depth (default: 1) |
 | `-h`, `--help` | Show help |
 | `-v`, `--version` | Show version |
@@ -199,13 +233,14 @@ Git status works from any subdirectory within a repository — llmls finds the r
 ```
 target dir → [Walk] → [Git Status] → [Sort] → [Render]
                 │           │            │          │
-           openat/      pipe+exec    priority    3 output
+           openat/      pipe+exec    priority/   3 output
+                                      mtime
            fstatat      porcelain    qsort       modes
 ```
 
 - **Walk**: Uses `openat`/`fdopendir`/`fstatat` (no PATH_MAX assumptions)
 - **Git**: Runs `git status --porcelain=v1 -z` via `pipe`+`fork`+`exec` (no shell injection)
-- **Sort**: Priority-based with case-insensitive alphabetical tiebreak
+- **Sort**: Priority-based by default; `-t` uses mtime descending with stable tiebreaks
 - **Render**: Direct `printf` — no intermediate serialization
 
 ## Positioning

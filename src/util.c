@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <pwd.h>
+#include <grp.h>
 
 void format_size(off_t bytes, char *buf, size_t bufsz)
 {
@@ -38,6 +40,36 @@ void format_age(time_t mtime, time_t now, char *buf, size_t bufsz)
     } else {
         snprintf(buf, bufsz, "%ldy", diff / (86400 * 365));
     }
+}
+
+void format_mode(mode_t mode, char *buf, size_t bufsz)
+{
+    unsigned int perms = (unsigned int)(mode & 07777);
+
+    if (perms & 07000)
+        snprintf(buf, bufsz, "%04o", perms);
+    else
+        snprintf(buf, bufsz, "%03o", perms & 0777);
+}
+
+void format_owner(uid_t uid, char *buf, size_t bufsz)
+{
+    struct passwd *pw = getpwuid(uid);
+
+    if (pw && pw->pw_name && pw->pw_name[0] != '\0')
+        snprintf(buf, bufsz, "%s", pw->pw_name);
+    else
+        snprintf(buf, bufsz, "%lu", (unsigned long)uid);
+}
+
+void format_group(gid_t gid, char *buf, size_t bufsz)
+{
+    struct group *gr = getgrgid(gid);
+
+    if (gr && gr->gr_name && gr->gr_name[0] != '\0')
+        snprintf(buf, bufsz, "%s", gr->gr_name);
+    else
+        snprintf(buf, bufsz, "%lu", (unsigned long)gid);
 }
 
 const char *git_status_str(enum git_status s)

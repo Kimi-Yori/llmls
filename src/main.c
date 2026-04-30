@@ -16,10 +16,46 @@ static void usage(void)
         "  -a, --all      Show all files (include ignored)\n"
         "  -d, --dense    Dense output format\n"
         "  -j, --json     JSON output format\n"
+        "  -l, --long     Show permissions, owner, group\n"
+        "  -t, --time     Sort by modification time (newest first)\n"
         "  --depth N      Listing depth (default: 1)\n"
         "  -h, --help     Show this help\n"
         "  -v, --version  Show version\n",
         LLMLS_VERSION);
+}
+
+static int parse_short_options(const char *arg, struct options *opts)
+{
+    for (const char *p = arg + 1; *p; p++) {
+        switch (*p) {
+        case 'a':
+            opts->show_all = 1;
+            break;
+        case 'd':
+            opts->mode = OUTPUT_DENSE;
+            break;
+        case 'j':
+            opts->mode = OUTPUT_JSON;
+            break;
+        case 'l':
+            opts->show_long = 1;
+            break;
+        case 't':
+            opts->sort_by_time = 1;
+            break;
+        case 'h':
+            opts->show_help = 1;
+            break;
+        case 'v':
+            opts->show_version = 1;
+            break;
+        default:
+            fprintf(stderr, "llmls: unknown option: -%c\n", *p);
+            return -1;
+        }
+    }
+
+    return 0;
 }
 
 static int parse_options(int argc, char **argv, struct options *opts)
@@ -27,6 +63,8 @@ static int parse_options(int argc, char **argv, struct options *opts)
     opts->path = ".";
     opts->depth = 1;
     opts->show_all = 0;
+    opts->show_long = 0;
+    opts->sort_by_time = 0;
     opts->mode = OUTPUT_DEFAULT;
     opts->show_help = 0;
     opts->show_version = 0;
@@ -38,6 +76,10 @@ static int parse_options(int argc, char **argv, struct options *opts)
             opts->mode = OUTPUT_DENSE;
         } else if (strcmp(argv[i], "-j") == 0 || strcmp(argv[i], "--json") == 0) {
             opts->mode = OUTPUT_JSON;
+        } else if (strcmp(argv[i], "-l") == 0 || strcmp(argv[i], "--long") == 0) {
+            opts->show_long = 1;
+        } else if (strcmp(argv[i], "-t") == 0 || strcmp(argv[i], "--time") == 0) {
+            opts->sort_by_time = 1;
         } else if (strcmp(argv[i], "--depth") == 0) {
             if (i + 1 >= argc) {
                 fprintf(stderr, "llmls: --depth requires a number\n");
@@ -49,6 +91,12 @@ static int parse_options(int argc, char **argv, struct options *opts)
             opts->show_help = 1;
         } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
             opts->show_version = 1;
+        } else if (strncmp(argv[i], "--", 2) == 0) {
+            fprintf(stderr, "llmls: unknown option: %s\n", argv[i]);
+            return -1;
+        } else if (argv[i][0] == '-' && argv[i][1] != '\0') {
+            if (parse_short_options(argv[i], opts) < 0)
+                return -1;
         } else if (argv[i][0] == '-') {
             fprintf(stderr, "llmls: unknown option: %s\n", argv[i]);
             return -1;
@@ -133,20 +181,20 @@ int main(int argc, char **argv)
     }
 
     /* Sort */
-    sort_entries(&list);
+    sort_entries(&list, opts.sort_by_time);
 
     /* Render */
     time_t now = time(NULL);
 
     switch (opts.mode) {
     case OUTPUT_JSON:
-        render_json(&summary, &list, now);
+        render_json(&summary, &list, now, opts.show_long);
         break;
     case OUTPUT_DENSE:
-        render_dense(&summary, &list, now, 0);
+        render_dense(&summary, &list, now, 0, opts.show_long);
         break;
     default:
-        render_default(&summary, &list, now, 0);
+        render_default(&summary, &list, now, 0, opts.show_long);
         break;
     }
 

@@ -1,5 +1,6 @@
 #include "entry.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *type_str(enum entry_type t)
@@ -12,6 +13,52 @@ static const char *type_str(enum entry_type t)
     }
 }
 
+static void print_long_default(const struct entry *e)
+{
+    char modebuf[8];
+    char ownerbuf[64];
+    char groupbuf[64];
+
+    format_mode(e->mode, modebuf, sizeof(modebuf));
+    format_owner(e->uid, ownerbuf, sizeof(ownerbuf));
+    format_group(e->gid, groupbuf, sizeof(groupbuf));
+    printf(" mode:%s owner:%s group:%s", modebuf, ownerbuf, groupbuf);
+}
+
+static void print_long_dense(const struct entry *e)
+{
+    char modebuf[8];
+    char ownerbuf[64];
+    char groupbuf[64];
+
+    format_mode(e->mode, modebuf, sizeof(modebuf));
+    format_owner(e->uid, ownerbuf, sizeof(ownerbuf));
+    format_group(e->gid, groupbuf, sizeof(groupbuf));
+    printf(" %s %s:%s", modebuf, ownerbuf, groupbuf);
+}
+
+static void print_symlink_target_default(const struct entry *e)
+{
+    if (!e->link_target)
+        return;
+
+    char *esc = escape_filename(e->link_target);
+    const char *target = esc ? esc : e->link_target;
+    printf(" target:%s", target);
+    free(esc);
+}
+
+static void print_symlink_target_dense(const struct entry *e)
+{
+    if (!e->link_target)
+        return;
+
+    char *esc = escape_filename(e->link_target);
+    const char *target = esc ? esc : e->link_target;
+    printf(" ->%s", target);
+    free(esc);
+}
+
 /*
  * Default self-explanatory format:
  *
@@ -20,7 +67,8 @@ static const char *type_str(enum entry_type t)
  *   dir Manual/ files:28
  */
 void render_default(const struct dir_summary *summary,
-                    const struct entry_list *list, time_t now, int indent)
+                    const struct entry_list *list, time_t now, int indent,
+                    int show_long)
 {
     (void)indent;
     char sizebuf[32];
@@ -52,7 +100,13 @@ void render_default(const struct dir_summary *summary,
             char agebuf[32];
             format_age(e->mtime, now, agebuf, sizeof(agebuf));
             printf(" age:%s", agebuf);
+
+            if (show_long && e->type == ENTRY_SYMLINK)
+                print_symlink_target_default(e);
         }
+
+        if (show_long && !e->error)
+            print_long_default(e);
 
         /* git status */
         const char *gs = git_status_str(e->git);
@@ -74,7 +128,8 @@ void render_default(const struct dir_summary *summary,
  * d .. Manual/ f=28
  */
 void render_dense(const struct dir_summary *summary,
-                  const struct entry_list *list, time_t now, int indent)
+                  const struct entry_list *list, time_t now, int indent,
+                  int show_long)
 {
     (void)indent;
     char sizebuf[32];
@@ -98,15 +153,23 @@ void render_dense(const struct dir_summary *summary,
 
         if (e->type == ENTRY_DIR) {
             if (e->dir_files >= 0)
-                printf("%c %s %s f=%d\n", tc, gp, name, e->dir_files);
+                printf("%c %s %s f=%d", tc, gp, name, e->dir_files);
             else
-                printf("%c %s %s\n", tc, gp, name);
+                printf("%c %s %s", tc, gp, name);
         } else {
             format_size(e->size, sizebuf, sizeof(sizebuf));
             char agebuf[32];
             format_age(e->mtime, now, agebuf, sizeof(agebuf));
-            printf("%c %s %s %s %s\n", tc, gp, name, sizebuf, agebuf);
+            printf("%c %s %s %s %s", tc, gp, name, sizebuf, agebuf);
+
+            if (show_long && e->type == ENTRY_SYMLINK)
+                print_symlink_target_dense(e);
         }
+
+        if (show_long && !e->error)
+            print_long_dense(e);
+
+        printf("\n");
 
         if (esc)
             free(esc);
