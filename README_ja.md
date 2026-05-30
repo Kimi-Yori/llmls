@@ -233,12 +233,12 @@ Git statusはリポジトリ内のどのサブディレクトリからでも動�
 ```
 対象ディレクトリ → [Walk] → [Git Status] → [Sort] → [Render]
                      │           │             │          │
-                openat/      pipe+exec      優先度/    3つの出力
+                openat/      posix_spawn    優先度/    3つの出力
                 fstatat      porcelain      mtime      モード
 ```
 
-- **Walk**: `openat`/`fdopendir`/`fstatat` 使用（PATH_MAX前提なし）
-- **Git**: `git status --porcelain=v1 -z` を `pipe`+`fork`+`exec` で実行（shell injection なし）
+- **Walk**: `openat`/`fdopendir`/`fstatat` 使用（PATH_MAX前提なし）。macOSでは `getattrlistbulk()` で一括メタデータ取得
+- **Git**: `git status --porcelain=v1 -z` を `posix_spawn` で実行（shell injectionなし、macOSではカーネル高速パス）
 - **Sort**: デフォルトは優先度ベース。`-t` はmtime降順、同一timestampは安定タイブレーク
 - **Render**: `printf` 直接出力 — 中間シリアライズなし
 
@@ -253,32 +253,31 @@ llmlsが答える問い：「ここにどんなファイルがあり、何が変
 ## ビルドターゲット
 
 ```bash
-make              # dynamicリリース（システムcc、~27 KB）
-make static       # staticリリース（musl-gcc、~63 KB）
+make              # dynamicリリース（システムcc、Linux ~27 KB / macOS ~34 KB LTO付き）
+make static       # staticリリース（musl-gcc、~63 KB、Linuxのみ）
+make universal    # macOS universalバイナリ（arm64 + x86_64）
 make clean        # ビルド成果物削除
 make install      # /usr/local/bin にインストール
 ```
 
 ## ベンチマーク
 
-Linux x86_64上にて計測。
+| 指標 | Linux x86_64 | macOS arm64 |
+|------|-------------|-------------|
+| バイナリサイズ（static） | **63 KB** | — |
+| バイナリサイズ（dynamic） | **27 KB** | **34 KB**（LTO） |
+| 起動時間（gitなし） | **~2 ms** | **~2 ms** |
+| 起動時間（gitリポジトリ） | **~5 ms** | **~4 ms** |
+| `ls -la` 比の出力削減率 | **57〜70%** | **57〜70%** |
 
-| 指標 | 値 |
-|------|-----|
-| バイナリサイズ（static） | **63 KB** |
-| バイナリサイズ（dynamic） | **27 KB** |
-| 起動時間（gitなし） | **~2 ms** |
-| 起動時間（gitリポジトリ） | **~5 ms** |
-| `ls -la` 比の出力削減率 | **57〜70%** |
-
-gitリポジトリでのオーバーヘッド（~3 ms）はgitプロセスの `fork`+`exec` コスト — git連携では不可避であり、インタラクティブな遅延として十分許容範囲です。
+macOSでは `posix_spawn`（カーネル高速パス）と `getattrlistbulk`（一括メタデータsyscall）により、汎用POSIXパスより低オーバーヘッドで動作します。
 
 ## 制限事項
 
 - デフォルトは1階層のみ（再帰走査はv0.2で予定）
 - `.gitignore` パースなし（ビルトイン除外リストのみ）
 - Git status機能にはPATH上の `git` が必要
-- Linux x86_64のみ（他プラットフォームは未テスト）
+- Linux x86_64とmacOS arm64でテスト済み（他プラットフォームは未テスト）
 
 ## 関連プロジェクト
 
