@@ -156,7 +156,7 @@ static int walk_directory_darwin(int dirfd, int show_all,
                     ATTR_CMN_ACCESSMASK | ATTR_CMN_ERROR;
     al.fileattr = ATTR_FILE_DATALENGTH;
 
-    char attrBuf[16384]; /* handles ~200 entries per call */
+    _Alignas(8) char attrBuf[16384]; /* handles ~200 entries per call */
     char * const attrBufEnd = attrBuf + sizeof(attrBuf);
     int saw_data = 0;
 
@@ -201,20 +201,25 @@ static int walk_directory_darwin(int dirfd, int show_all,
             attribute_set_t returned = *(attribute_set_t *)field;
             field += sizeof(attribute_set_t);
 
+            /* getattrlistbulk packs attributes in ascending bit-value order,
+             * so they must be parsed in that order regardless of how they were
+             * requested. For the requested common attrs the order is:
+             *   NAME < OBJTYPE < MODTIME < OWNERID < GRPID < ACCESSMASK < ERROR
+             * (ATTR_CMN_ERROR = 0x20000000 has the highest bit, so it is last),
+             * followed by the file attrs (ATTR_FILE_DATALENGTH). */
             uint32_t error = 0;
-            if (returned.commonattr & ATTR_CMN_ERROR) {
-                if (field + sizeof(uint32_t) > entry_end) goto malformed;
-                error = *(uint32_t *)field;
-                field += sizeof(uint32_t);
-            }
 
             const char *name = NULL;
             if (returned.commonattr & ATTR_CMN_NAME) {
                 if (field + sizeof(attrreference_t) > entry_end) goto malformed;
                 attrreference_t *ref = (attrreference_t *)field;
                 char *name_ptr = (char *)ref + ref->attr_dataoffset;
-                /* The name string must lie within the buffer. */
-                if (name_ptr < attrBuf || name_ptr >= attrBufEnd) {
+                /* The name string must lie entirely within this entry and be
+                 * NUL-terminated. */
+                if (ref->attr_length == 0 ||
+                    name_ptr < (entry_end - length) ||
+                    name_ptr + ref->attr_length > entry_end ||
+                    name_ptr[ref->attr_length - 1] != '\0') {
                     fprintf(stderr,
                             "llmls: getattrlistbulk name reference out of bounds\n");
                     return -1;
@@ -255,6 +260,12 @@ static int walk_directory_darwin(int dirfd, int show_all,
             if (returned.commonattr & ATTR_CMN_ACCESSMASK) {
                 if (field + sizeof(uint32_t) > entry_end) goto malformed;
                 access_mask = *(uint32_t *)field;
+                field += sizeof(uint32_t);
+            }
+
+            if (returned.commonattr & ATTR_CMN_ERROR) {
+                if (field + sizeof(uint32_t) > entry_end) goto malformed;
+                error = *(uint32_t *)field;
                 field += sizeof(uint32_t);
             }
 
