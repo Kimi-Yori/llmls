@@ -233,13 +233,13 @@ Git status works from any subdirectory within a repository — llmls finds the r
 ```
 target dir → [Walk] → [Git Status] → [Sort] → [Render]
                 │           │            │          │
-           openat/      pipe+exec    priority/   3 output
+           openat/      posix_spawn  priority/   3 output
                                       mtime
            fstatat      porcelain    qsort       modes
 ```
 
-- **Walk**: Uses `openat`/`fdopendir`/`fstatat` (no PATH_MAX assumptions)
-- **Git**: Runs `git status --porcelain=v1 -z` via `pipe`+`fork`+`exec` (no shell injection)
+- **Walk**: Uses `openat`/`fdopendir`/`fstatat` (no PATH_MAX assumptions). On macOS, uses `getattrlistbulk()` for batch metadata retrieval in a single syscall
+- **Git**: Runs `git status --porcelain=v1 -z` via `posix_spawn` (no shell injection, fast path on macOS)
 - **Sort**: Priority-based by default; `-t` uses mtime descending with stable tiebreaks
 - **Render**: Direct `printf` — no intermediate serialization
 
@@ -254,32 +254,31 @@ llmls answers: "What files are here, what changed, and what matters?" — the de
 ## Build Targets
 
 ```bash
-make              # Dynamic release (system cc, ~27 KB)
-make static       # Static release (musl-gcc, ~63 KB)
+make              # Dynamic release (system cc, ~27 KB on Linux, ~34 KB on macOS with LTO)
+make static       # Static release (musl-gcc, ~63 KB, Linux only)
+make universal    # Universal binary for macOS (arm64 + x86_64)
 make clean        # Remove build artifacts
 make install      # Install to /usr/local/bin
 ```
 
 ## Benchmarks
 
-Measured on Linux x86_64.
+| Metric | Linux x86_64 | macOS arm64 |
+|--------|-------------|-------------|
+| Binary size (static) | **63 KB** | — |
+| Binary size (dynamic) | **27 KB** | **34 KB** (LTO) |
+| Startup (non-git dir) | **~2 ms** | **~2 ms** |
+| Startup (git repo) | **~5 ms** | **~4 ms** |
+| Output reduction vs `ls -la` | **57-70%** | **57-70%** |
 
-| Metric | Value |
-|--------|-------|
-| Binary size (static) | **63 KB** |
-| Binary size (dynamic) | **27 KB** |
-| Startup (non-git dir) | **~2 ms** |
-| Startup (git repo) | **~5 ms** |
-| Output reduction vs `ls -la` | **57-70%** |
-
-The git-repo overhead (~3 ms) comes from `fork`+`exec` of the git process — unavoidable when integrating with git, and still well within interactive latency.
+macOS uses `posix_spawn` (kernel fast path) and `getattrlistbulk` (batch metadata syscall) for lower overhead than the generic POSIX path.
 
 ## Limitations
 
 - Single depth by default (recursive walk planned for v0.2)
 - No `.gitignore` parsing (uses built-in ignore list only)
 - Requires `git` in PATH for git status features
-- Linux x86_64 only (other platforms untested)
+- Tested on Linux x86_64 and macOS arm64 (other platforms may work but are untested)
 
 ## Related Projects
 

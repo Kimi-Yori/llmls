@@ -6,6 +6,9 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <spawn.h>
+
+extern char **environ;
 
 /* Hash map entry for git status */
 struct git_entry {
@@ -79,96 +82,53 @@ static enum git_status parse_porcelain(char x, char y)
 }
 
 /*
- * Find git repo root by running: git -C <path> rev-parse --show-toplevel
- * Returns allocated string (caller frees) or NULL if not in a repo.
+ * Spawn a command via posix_spawnp, capture stdout into *out_buf.
+ * On success, *out_buf is always a non-NULL, NUL-terminated allocation
+ * of length *out_len (caller must free). Empty stdout returns len=0
+ * with a 1-byte buffer holding '\0' — distinguishable from spawn/exec
+ * failure (returns -1). stderr is redirected to /dev/null.
  */
-char *git_find_root(const char *path)
+static ssize_t spawn_command(char *const argv[], char **out_buf, size_t *out_len)
 {
-    int pipefd[2];
-    if (pipe(pipefd) < 0)
-        return NULL;
-
-    pid_t pid = fork();
-    if (pid < 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
-        return NULL;
-    }
-
-    if (pid == 0) {
-        close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
-        close(pipefd[1]);
-        int devnull = open("/dev/null", O_WRONLY);
-        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
-        execlp("git", "git", "-C", path,
-               "rev-parse", "--show-toplevel", (char *)NULL);
-        _exit(127);
-    }
-
-    close(pipefd[1]);
-    char buf[4096];
-    ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
-    close(pipefd[0]);
-
-    int wstatus;
-    waitpid(pid, &wstatus, 0);
-
-    if (n <= 0 || !WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0)
-        return NULL;
-
-    /* strip trailing newline */
-    buf[n] = '\0';
-    while (n > 0 && (buf[n-1] == '\n' || buf[n-1] == '\r'))
-        buf[--n] = '\0';
-
-    return strdup(buf);
-}
-
-/*
- * Run: git -C <repo_root> status --porcelain=v1 -z
- * Parse NUL-delimited output.
- * Uses pipe+fork+execvp (no shell injection).
- */
-int git_load_status(const char *repo_root)
-{
-    if (git_loaded)
-        return 0;
+    *out_buf = NULL;
+    *out_len = 0;
 
     int pipefd[2];
     if (pipe(pipefd) < 0)
         return -1;
 
-    pid_t pid = fork();
-    if (pid < 0) {
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
         close(pipefd[0]);
         close(pipefd[1]);
         return -1;
     }
 
-    if (pid == 0) {
-        /* child */
+    int rc = 0;
+    rc |= posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+    rc |= posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+    rc |= posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+    rc |= posix_spawn_file_actions_addopen(&actions, STDERR_FILENO,
+                                           "/dev/null", O_WRONLY, 0);
+    if (rc != 0) {
+        posix_spawn_file_actions_destroy(&actions);
         close(pipefd[0]);
-        dup2(pipefd[1], STDOUT_FILENO);
         close(pipefd[1]);
-
-        /* redirect stderr to /dev/null */
-        int devnull = open("/dev/null", 0);
-        if (devnull >= 0) {
-            dup2(devnull, STDERR_FILENO);
-            close(devnull);
-        }
-
-        execlp("git", "git", "-C", repo_root,
-               "status", "--porcelain=v1", "-z", (char *)NULL);
-        _exit(127);
+        return -1;
     }
 
-    /* parent */
-    close(pipefd[1]);
-    int wstatus;
+    pid_t pid;
+    int err = posix_spawnp(&pid, argv[0], &actions, NULL, argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
 
-    /* read all output */
+    close(pipefd[1]);
+
+    if (err != 0) {
+        close(pipefd[0]);
+        return -1;
+    }
+
+    /* Read all output */
     char *buf = NULL;
     size_t bufsz = 0, bufcap = 0;
     char tmp[4096];
@@ -176,11 +136,12 @@ int git_load_status(const char *repo_root)
     while ((n = read(pipefd[0], tmp, sizeof(tmp))) > 0) {
         if (bufsz + (size_t)n > bufcap) {
             bufcap = (bufsz + (size_t)n) * 2;
+            if (bufcap < 4096) bufcap = 4096;
             char *nb = realloc(buf, bufcap);
             if (!nb) {
                 free(buf);
                 close(pipefd[0]);
-                waitpid(pid, &wstatus, 0);
+                waitpid(pid, NULL, 0);
                 return -1;
             }
             buf = nb;
@@ -189,12 +150,73 @@ int git_load_status(const char *repo_root)
         bufsz += (size_t)n;
     }
     close(pipefd[0]);
+
+    int wstatus;
     waitpid(pid, &wstatus, 0);
 
-    if (!buf || !WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) {
+    if (!WIFEXITED(wstatus) || WEXITSTATUS(wstatus) != 0) {
         free(buf);
         return -1;
     }
+
+    /* Guarantee a non-NULL, NUL-terminated buffer of size bufsz+1.
+     * Without this, callers writing buf[bufsz] = '\0' would clobber the
+     * heap when read sizes happen to fill bufcap exactly. */
+    char *nb = realloc(buf, bufsz + 1);
+    if (!nb) {
+        free(buf);
+        return -1;
+    }
+    nb[bufsz] = '\0';
+
+    *out_buf = nb;
+    *out_len = bufsz;
+    return (ssize_t)bufsz;
+}
+
+/*
+ * Find git repo root by running: git -C <path> rev-parse --show-toplevel
+ * Returns allocated string (caller frees) or NULL if not in a repo.
+ */
+char *git_find_root(const char *path)
+{
+    char *argv[] = {"git", "-C", (char *)path,
+                    "rev-parse", "--show-toplevel", NULL};
+
+    char *buf = NULL;
+    size_t len = 0;
+    if (spawn_command(argv, &buf, &len) < 0)
+        return NULL;
+
+    /* strip trailing newline (spawn_command guarantees buf[len] is already '\0') */
+    while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
+        buf[--len] = '\0';
+
+    if (len == 0) {
+        free(buf);
+        return NULL;
+    }
+
+    return buf;
+}
+
+/*
+ * Run: git -C <repo_root> status --porcelain=v1 -z
+ * Parse NUL-delimited output.
+ */
+int git_load_status(const char *repo_root)
+{
+    if (git_loaded)
+        return 0;
+
+    char *argv[] = {"git", "-C", (char *)repo_root,
+                    "status", "--porcelain=v1", "-z", NULL};
+
+    char *buf = NULL;
+    size_t bufsz = 0;
+    if (spawn_command(argv, &buf, &bufsz) < 0)
+        return -1;
+    /* Empty output is valid: clean repo with no porcelain entries. */
 
     /* Parse NUL-delimited entries.
      * Format: XY filename\0  (or XY oldname\0newname\0 for renames)
