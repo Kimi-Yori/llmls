@@ -4,6 +4,7 @@
 #include <string.h>
 #include <limits.h>
 #include <time.h>
+#include <sys/stat.h>
 
 static void usage(void)
 {
@@ -171,7 +172,16 @@ int main(int argc, char **argv)
     }
 
     if (walk_directory(opts.path, opts.depth, opts.show_all, git_prefix, &list, &summary) < 0) {
-        fprintf(stderr, "llmls: cannot open '%s'\n", opts.path);
+        /* 存在しないのか、ディレクトリ以外を渡されたのかを書き分ける。
+           同じ文面だと、存在確認のつもりで単一ファイルを渡した側が不在と誤読する */
+        struct stat st;
+        if (stat(opts.path, &st) != 0) {
+            fprintf(stderr, "llmls: no such path: '%s'\n", opts.path);
+        } else if (!S_ISDIR(st.st_mode)) {
+            fprintf(stderr, "llmls: not a directory (exists): '%s'\n", opts.path);
+        } else {
+            fprintf(stderr, "llmls: cannot open '%s'\n", opts.path);
+        }
         entry_list_free(&list);
         free(display_buf);
         free(git_root);
