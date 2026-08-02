@@ -123,7 +123,9 @@ if "$BIN" "$TMP/no_such_file" >/dev/null 2>&1; then
 fi
 
 # a trailing slash on a file is rejected as not-a-directory
-out=$("$BIN" "$SINGLE/" 2>&1 || true)
+if out=$("$BIN" "$SINGLE/" 2>&1); then
+    fail "trailing slash on a file should exit non-zero"
+fi
 assert_contains "$out" 'not a directory'
 
 # --- git status for a single file ---
@@ -162,6 +164,9 @@ if [ -n "$REPO" ]; then
     # relative path from inside the repo
     out=$(cd "$REPO" && "$BIN" tracked.txt)
     assert_contains "$out" 'git:added'
+else
+    # Announce the gap: a silent skip is indistinguishable from a pass.
+    printf 'SKIP: git fixture unavailable, git status cases not verified\n' >&2
 fi
 
 printf 'ok\n'
