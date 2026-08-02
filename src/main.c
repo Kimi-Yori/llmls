@@ -109,6 +109,44 @@ static int parse_options(int argc, char **argv, struct options *opts)
     return 0;
 }
 
+/*
+ * Resolve the repository for a file path.
+ * git -C takes a directory, so rev-parse fails on a file and the caller sees
+ * no git status at all; resolve from the parent directory instead.
+ */
+static void resolve_git_for_file(const char *path, char **git_root,
+                                 char **git_prefix)
+{
+    if (*git_root)
+        return;
+
+    char *dup = strdup(path);
+    if (!dup)
+        return;
+
+    const char *parent = ".";
+    char *slash = strrchr(dup, '/');
+    if (slash) {
+        *slash = '\0';
+        parent = dup[0] ? dup : "/";
+    }
+
+    *git_root = git_find_root(parent);
+    free(dup);
+    if (!*git_root)
+        return;
+
+    git_load_status(*git_root);
+
+    char abspath[PATH_MAX];
+    if (!realpath(path, abspath))
+        return; /* broken symlink: no repo-relative path to look up */
+
+    size_t root_len = strlen(*git_root);
+    if (strncmp(abspath, *git_root, root_len) == 0 && abspath[root_len] == '/')
+        *git_prefix = strdup(abspath + root_len + 1);
+}
+
 int main(int argc, char **argv)
 {
     struct options opts;
@@ -172,22 +210,37 @@ int main(int argc, char **argv)
     }
 
     if (walk_directory(opts.path, opts.depth, opts.show_all, git_prefix, &list, &summary) < 0) {
-        /* 存在しないのか、ディレクトリ以外を渡されたのかを書き分ける。
-           同じ文面だと、存在確認のつもりで単一ファイルを渡した側が不在と誤読する */
-        struct stat st;
-        if (stat(opts.path, &st) != 0) {
+        struct stat lst;
+        int handled = 0;
+
+        /* lstat for existence: a broken symlink is present even though stat fails. */
+        if (lstat(opts.path, &lst) != 0) {
             fprintf(stderr, "llmls: no such path: '%s'\n", opts.path);
-        } else if (!S_ISDIR(st.st_mode)) {
-            fprintf(stderr, "llmls: not a directory (exists): '%s'\n", opts.path);
         } else {
-            fprintf(stderr, "llmls: cannot open '%s'\n", opts.path);
+            struct stat st;
+            int is_dir = (stat(opts.path, &st) == 0) && S_ISDIR(st.st_mode);
+
+            if (is_dir) {
+                fprintf(stderr, "llmls: cannot open '%s'\n", opts.path);
+            } else {
+                /* Path as given: the trailing slash added above suits a directory only. */
+                summary.path = opts.path;
+                resolve_git_for_file(opts.path, &git_root, &git_prefix);
+                if (walk_single_file(opts.path, git_prefix, &list, &summary) == 0)
+                    handled = 1;
+                else
+                    fprintf(stderr, "llmls: cannot stat '%s'\n", opts.path);
+            }
         }
-        entry_list_free(&list);
-        free(display_buf);
-        free(git_root);
-        free(git_prefix);
-        git_cleanup();
-        return 1;
+
+        if (!handled) {
+            entry_list_free(&list);
+            free(display_buf);
+            free(git_root);
+            free(git_prefix);
+            git_cleanup();
+            return 1;
+        }
     }
 
     /* Sort */

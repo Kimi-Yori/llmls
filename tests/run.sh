@@ -88,4 +88,38 @@ case "$first" in
 esac
 assert_contains "$out" '^f \.\. new\.txt [^ ]+ [^ ]+ [0-7]{3,4} [^ ]+:[^ ]+$'
 
+# --- single file target ---
+SINGLE="$LONGDIR/main.c"
+
+out=$("$BIN" "$SINGLE")
+assert_contains "$out" "^file $SINGLE size:[^ ]+ age:[^ ]+$"
+assert_not_contains "$out" '^dir '
+
+out=$("$BIN" -l "$SINGLE")
+assert_contains "$out" "^file $SINGLE size:[^ ]+ age:[^ ]+ mode:644 owner:[^ ]+ group:[^ ]+$"
+
+out=$("$BIN" -d "$SINGLE")
+assert_contains "$out" "^f \.\. $SINGLE [^ ]+ [^ ]+$"
+assert_not_contains "$out" '^\. d='
+
+# JSON keeps the container shape so consumers do not need a special case
+out=$("$BIN" -j "$SINGLE")
+assert_contains "$out" '"files":1'
+assert_contains "$out" '"dirs":0'
+assert_contains "$out" '"type":"file"'
+
+# a symlink target is listed as the link itself, not as what it points to
+out=$("$BIN" -l "$LONGDIR/link")
+assert_contains "$out" "^symlink $LONGDIR/link size:[^ ]+ age:[^ ]+ target:main\.c mode:[0-7]{3,4}"
+
+# a broken symlink exists even though stat() fails on it
+ln -s /nonexistent/target "$TMP/broken"
+out=$("$BIN" "$TMP/broken")
+assert_contains "$out" "^symlink $TMP/broken size:[^ ]+ age:[^ ]+$"
+
+# a missing path is still an error
+if "$BIN" "$TMP/no_such_file" >/dev/null 2>&1; then
+    fail "missing path should exit non-zero"
+fi
+
 printf 'ok\n'

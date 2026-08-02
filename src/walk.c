@@ -84,6 +84,57 @@ const char *errno_str(int err)
     }
 }
 
+/*
+ * List one non-directory path as a single entry.
+ * Callers reach for llmls to inspect one file; refusing the path would send
+ * them to a different tool for the same question.
+ */
+int walk_single_file(const char *path, const char *git_prefix,
+                     struct entry_list *list, struct dir_summary *summary)
+{
+    struct stat st;
+    if (lstat(path, &st) < 0)
+        return -1;
+
+    struct entry e = {0};
+    /* Show the path as given, so the caller sees what they typed. */
+    e.name = strdup(path);
+    if (!e.name)
+        return -1;
+
+    e.mtime = st.st_mtime;
+    e.mtime_nsec = st.st_mtim.tv_nsec;
+    e.mode = st.st_mode;
+    e.uid = st.st_uid;
+    e.gid = st.st_gid;
+    e.size = st.st_size;
+    e.type = S_ISLNK(st.st_mode) ? ENTRY_SYMLINK : ENTRY_FILE;
+
+    if (e.type == ENTRY_SYMLINK) {
+        char lbuf[4096];
+        ssize_t llen = readlink(path, lbuf, sizeof(lbuf) - 1);
+        if (llen > 0) {
+            lbuf[llen] = '\0';
+            e.link_target = strdup(lbuf);
+        }
+    }
+
+    if (git_prefix && git_prefix[0] != '\0')
+        e.git = git_file_status(git_prefix);
+
+    if (entry_list_push(list, &e) < 0) {
+        free(e.name);
+        free(e.link_target);
+        return -1;
+    }
+
+    summary->total_files = 1;
+    summary->total_dirs = 0;
+    summary->total_size = st.st_size;
+    summary->single_file = 1;
+    return 0;
+}
+
 int walk_directory(const char *path, int depth, int show_all,
                    const char *git_prefix,
                    struct entry_list *list, struct dir_summary *summary)

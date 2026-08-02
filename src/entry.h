@@ -68,6 +68,7 @@ struct dir_summary {
     int         total_files;
     int         total_dirs;
     off_t       total_size;
+    int         single_file;    /* target is one file: text output omits the dir header */
 };
 
 /* Output mode */
@@ -95,6 +96,9 @@ struct options {
 int walk_directory(const char *path, int depth, int show_all,
                    const char *git_prefix,
                    struct entry_list *list, struct dir_summary *summary);
+/* git_prefix is the repo-relative path of the file itself, not of a parent dir. */
+int walk_single_file(const char *path, const char *git_prefix,
+                     struct entry_list *list, struct dir_summary *summary);
 
 /* ignore.c */
 int should_ignore(const char *name, int show_all);
