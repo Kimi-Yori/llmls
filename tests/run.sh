@@ -122,4 +122,46 @@ if "$BIN" "$TMP/no_such_file" >/dev/null 2>&1; then
     fail "missing path should exit non-zero"
 fi
 
+# a trailing slash on a file is rejected as not-a-directory
+out=$("$BIN" "$SINGLE/" 2>&1 || true)
+assert_contains "$out" 'not a directory'
+
+# --- git status for a single file ---
+# The symlink cases guard against resolving the target instead of the link.
+REPO="$TMP/repo"
+mkdir "$REPO"
+(cd "$REPO" && git init -q >/dev/null 2>&1 &&
+ git config user.email t@example.com && git config user.name tester) || REPO=""
+
+if [ -n "$REPO" ]; then
+    printf 'x\n' > "$REPO/tracked.txt"
+    (cd "$REPO" && git add tracked.txt)
+    ln -s tracked.txt "$REPO/link"
+    ln -s /nonexistent/target "$REPO/broken"
+    mkdir "$REPO/sub"
+    printf 'y\n' > "$REPO/sub/nested.txt"
+    # tracked: git reports an untracked directory as "sub/", never its members
+    (cd "$REPO" && git add sub/nested.txt)
+
+    out=$("$BIN" "$REPO/tracked.txt")
+    assert_contains "$out" 'git:added'
+
+    # a nested path exercises the prefix built from the parent directory
+    out=$("$BIN" "$REPO/sub/nested.txt")
+    assert_contains "$out" 'git:added'
+
+    # the link's own status, not the target's
+    out=$("$BIN" "$REPO/link")
+    assert_contains "$out" 'git:untracked'
+    assert_not_contains "$out" 'git:added'
+
+    # a broken link still has a repo-relative path
+    out=$("$BIN" "$REPO/broken")
+    assert_contains "$out" 'git:untracked'
+
+    # relative path from inside the repo
+    out=$(cd "$REPO" && "$BIN" tracked.txt)
+    assert_contains "$out" 'git:added'
+fi
+
 printf 'ok\n'

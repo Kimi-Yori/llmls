@@ -1,4 +1,5 @@
 #include "entry.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,6 +114,10 @@ static int parse_options(int argc, char **argv, struct options *opts)
  * Resolve the repository for a file path.
  * git -C takes a directory, so rev-parse fails on a file and the caller sees
  * no git status at all; resolve from the parent directory instead.
+ *
+ * The last component is never resolved: realpath() on the whole path follows a
+ * trailing symlink, which reports the target's status in place of the link's,
+ * and yields nothing at all when the link is broken.
  */
 static void resolve_git_for_file(const char *path, char **git_root,
                                  char **git_prefix)
@@ -125,26 +130,58 @@ static void resolve_git_for_file(const char *path, char **git_root,
         return;
 
     const char *parent = ".";
+    const char *base = dup;
     char *slash = strrchr(dup, '/');
     if (slash) {
         *slash = '\0';
         parent = dup[0] ? dup : "/";
+        base = slash + 1;
     }
 
     *git_root = git_find_root(parent);
-    free(dup);
-    if (!*git_root)
+    if (!*git_root) {
+        free(dup);
         return;
+    }
 
     git_load_status(*git_root);
 
     char abspath[PATH_MAX];
-    if (!realpath(path, abspath))
-        return; /* broken symlink: no repo-relative path to look up */
+    if (!realpath(parent, abspath)) {
+        free(dup);
+        return;
+    }
 
     size_t root_len = strlen(*git_root);
-    if (strncmp(abspath, *git_root, root_len) == 0 && abspath[root_len] == '/')
-        *git_prefix = strdup(abspath + root_len + 1);
+    if (strncmp(abspath, *git_root, root_len) != 0) {
+        free(dup);
+        return;
+    }
+
+    const char *rel = abspath + root_len;
+    if (root_len == 1 && (*git_root)[0] == '/') {
+        /* root is "/": abspath + 1 is already relative */
+    } else if (*rel == '/') {
+        rel++;
+    } else if (*rel != '\0') {
+        free(dup); /* shared prefix, different directory */
+        return;
+    }
+
+    size_t rel_len = strlen(rel);
+    size_t base_len = strlen(base);
+    char *buf = malloc(rel_len + 1 + base_len + 1);
+    if (buf) {
+        if (rel_len > 0) {
+            memcpy(buf, rel, rel_len);
+            buf[rel_len] = '/';
+            memcpy(buf + rel_len + 1, base, base_len + 1);
+        } else {
+            memcpy(buf, base, base_len + 1);
+        }
+        *git_prefix = buf;
+    }
+    free(dup);
 }
 
 int main(int argc, char **argv)
@@ -215,7 +252,10 @@ int main(int argc, char **argv)
 
         /* lstat for existence: a broken symlink is present even though stat fails. */
         if (lstat(opts.path, &lst) != 0) {
-            fprintf(stderr, "llmls: no such path: '%s'\n", opts.path);
+            if (errno == ENOTDIR)
+                fprintf(stderr, "llmls: not a directory: '%s'\n", opts.path);
+            else
+                fprintf(stderr, "llmls: no such path: '%s'\n", opts.path);
         } else {
             struct stat st;
             int is_dir = (stat(opts.path, &st) == 0) && S_ISDIR(st.st_mode);
