@@ -1,9 +1,11 @@
 #include "entry.h"
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
 #include <time.h>
+#include <sys/stat.h>
 
 static void usage(void)
 {
@@ -108,6 +110,80 @@ static int parse_options(int argc, char **argv, struct options *opts)
     return 0;
 }
 
+/*
+ * Resolve the repository for a file path.
+ * git -C takes a directory, so rev-parse fails on a file and the caller sees
+ * no git status at all; resolve from the parent directory instead.
+ *
+ * The last component is never resolved: realpath() on the whole path follows a
+ * trailing symlink, which reports the target's status in place of the link's,
+ * and yields nothing at all when the link is broken.
+ */
+static void resolve_git_for_file(const char *path, char **git_root,
+                                 char **git_prefix)
+{
+    if (*git_root)
+        return;
+
+    char *dup = strdup(path);
+    if (!dup)
+        return;
+
+    const char *parent = ".";
+    const char *base = dup;
+    char *slash = strrchr(dup, '/');
+    if (slash) {
+        *slash = '\0';
+        parent = dup[0] ? dup : "/";
+        base = slash + 1;
+    }
+
+    *git_root = git_find_root(parent);
+    if (!*git_root) {
+        free(dup);
+        return;
+    }
+
+    git_load_status(*git_root);
+
+    char abspath[PATH_MAX];
+    if (!realpath(parent, abspath)) {
+        free(dup);
+        return;
+    }
+
+    size_t root_len = strlen(*git_root);
+    if (strncmp(abspath, *git_root, root_len) != 0) {
+        free(dup);
+        return;
+    }
+
+    const char *rel = abspath + root_len;
+    if (root_len == 1 && (*git_root)[0] == '/') {
+        /* root is "/": abspath + 1 is already relative */
+    } else if (*rel == '/') {
+        rel++;
+    } else if (*rel != '\0') {
+        free(dup); /* shared prefix, different directory */
+        return;
+    }
+
+    size_t rel_len = strlen(rel);
+    size_t base_len = strlen(base);
+    char *buf = malloc(rel_len + 1 + base_len + 1);
+    if (buf) {
+        if (rel_len > 0) {
+            memcpy(buf, rel, rel_len);
+            buf[rel_len] = '/';
+            memcpy(buf + rel_len + 1, base, base_len + 1);
+        } else {
+            memcpy(buf, base, base_len + 1);
+        }
+        *git_prefix = buf;
+    }
+    free(dup);
+}
+
 int main(int argc, char **argv)
 {
     struct options opts;
@@ -171,13 +247,40 @@ int main(int argc, char **argv)
     }
 
     if (walk_directory(opts.path, opts.depth, opts.show_all, git_prefix, &list, &summary) < 0) {
-        fprintf(stderr, "llmls: cannot open '%s'\n", opts.path);
-        entry_list_free(&list);
-        free(display_buf);
-        free(git_root);
-        free(git_prefix);
-        git_cleanup();
-        return 1;
+        struct stat lst;
+        int handled = 0;
+
+        /* lstat for existence: a broken symlink is present even though stat fails. */
+        if (lstat(opts.path, &lst) != 0) {
+            if (errno == ENOTDIR)
+                fprintf(stderr, "llmls: not a directory: '%s'\n", opts.path);
+            else
+                fprintf(stderr, "llmls: no such path: '%s'\n", opts.path);
+        } else {
+            struct stat st;
+            int is_dir = (stat(opts.path, &st) == 0) && S_ISDIR(st.st_mode);
+
+            if (is_dir) {
+                fprintf(stderr, "llmls: cannot open '%s'\n", opts.path);
+            } else {
+                /* Path as given: the trailing slash added above suits a directory only. */
+                summary.path = opts.path;
+                resolve_git_for_file(opts.path, &git_root, &git_prefix);
+                if (walk_single_file(opts.path, git_prefix, &list, &summary) == 0)
+                    handled = 1;
+                else
+                    fprintf(stderr, "llmls: cannot stat '%s'\n", opts.path);
+            }
+        }
+
+        if (!handled) {
+            entry_list_free(&list);
+            free(display_buf);
+            free(git_root);
+            free(git_prefix);
+            git_cleanup();
+            return 1;
+        }
     }
 
     /* Sort */

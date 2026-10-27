@@ -73,10 +73,12 @@ void render_default(const struct dir_summary *summary,
     (void)indent;
     char sizebuf[32];
 
-    /* header line */
-    format_size(summary->total_size, sizebuf, sizeof(sizebuf));
-    printf("dir %s files:%d dirs:%d size:%s\n",
-           summary->path, summary->total_files, summary->total_dirs, sizebuf);
+    /* header line — omitted for a single file, where "dir" would be false */
+    if (!summary->single_file) {
+        format_size(summary->total_size, sizebuf, sizeof(sizebuf));
+        printf("dir %s files:%d dirs:%d size:%s\n",
+               summary->path, summary->total_files, summary->total_dirs, sizebuf);
+    }
 
     /* entries */
     for (size_t i = 0; i < list->count; i++) {
@@ -84,7 +86,9 @@ void render_default(const struct dir_summary *summary,
         char *esc = escape_filename(e->name);
         const char *name = esc ? esc : e->name;
 
-        printf("  %s %s", type_str(e->type), name);
+        /* Indent marks a child of the header line; without a header there is nothing to nest under. */
+        printf("%s%s %s", summary->single_file ? "" : "  ",
+               type_str(e->type), name);
 
         if (e->error) {
             printf(" error:%s", errno_str(e->error));
@@ -134,9 +138,11 @@ void render_dense(const struct dir_summary *summary,
     (void)indent;
     char sizebuf[32];
 
-    format_size(summary->total_size, sizebuf, sizeof(sizebuf));
-    printf(". d=%d f=%d sz=%s\n",
-           summary->total_dirs, summary->total_files, sizebuf);
+    if (!summary->single_file) {
+        format_size(summary->total_size, sizebuf, sizeof(sizebuf));
+        printf(". d=%d f=%d sz=%s\n",
+               summary->total_dirs, summary->total_files, sizebuf);
+    }
 
     for (size_t i = 0; i < list->count; i++) {
         const struct entry *e = &list->entries[i];

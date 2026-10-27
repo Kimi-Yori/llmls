@@ -93,6 +93,10 @@ llmls
 # Target a specific directory
 llmls /path/to/project
 
+# Target a single file — one line, no directory header
+llmls -l README.md
+# file README.md size:8K age:5d mode:644 owner:you group:you git:modified
+
 # Dense format (for agents that know the spec)
 llmls --dense
 # . d=3 f=12 sz=180K

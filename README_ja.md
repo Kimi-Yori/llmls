@@ -93,6 +93,10 @@ llmls
 # ディレクトリ指定
 llmls /path/to/project
 
+# ファイル1本を指定（ヘッダなしの1行）
+llmls -l README.md
+# file README.md size:8K age:5d mode:644 owner:you group:you git:modified
+
 # denseフォーマット（仕様を共有済みのエージェント向け）
 llmls --dense
 # . d=3 f=12 sz=180K
